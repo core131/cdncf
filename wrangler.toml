@@ -24,10 +24,6 @@ DEFAULT_PORT = "443"
 # pattern = "vpn.yourdomain.com/*"
 # zone_name = "yourdomain.com"
 
-# Limits
-[limits]
-cpu_ms = 50
-
 # Observability (opsional untuk debugging)
 [observability]
 enabled = true

@@ -3,7 +3,7 @@ name = "vlcdn"
 main = "worker.js"
 compatibility_date = "2024-01-01"
 compatibility_flags = []  # letakkan di level atas
-account_id = "32f9d5fc58dd05437ec5eacae4ac3b79"
+account_id = ""
 workers_dev = true
 
 # KV Namespace untuk menyimpan akun VLESS

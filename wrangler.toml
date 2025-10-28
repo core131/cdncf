@@ -2,13 +2,13 @@
 name = "vlcdn"
 main = "worker.js"
 compatibility_date = "2024-01-01"
-account_id = "" # Isi dengan Account ID Cloudflare Anda
+account_id = "32f9d5fc58dd05437ec5eacae4ac3b79" # Isi dengan Account ID Cloudflare Anda
 workers_dev = true
 
 # KV Namespace untuk menyimpan akun VLESS
 [[kv_namespaces]]
 binding = "VLESS_ACCOUNTS"
-id = "" # Isi dengan KV Namespace ID setelah dibuat
+id = "VLESS_ACCOUNTS" # Isi dengan KV Namespace ID setelah dibuat
 
 # Environment Variables (opsional)
 [vars]

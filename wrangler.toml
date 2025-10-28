@@ -10,7 +10,7 @@ workers_dev = true
 [[kv_namespaces]]
 # Isi dengan KV Namespace ID setelah dibuat
 binding = "VLESS_ACCOUNTS"
-id = "VLESS_ACCOUNTS"
+id = "45d73fbf51d24c448c5d0385b4a47316"
 
 # Environment Variables (opsional)
 [vars]
@@ -39,7 +39,7 @@ vars = { ENVIRONMENT = "development" }
 [[env.development.kv_namespaces]]
 # KV Namespace ID untuk development
 binding = "VLESS_ACCOUNTS"
-id = "VLESS_ACCOUNTS"
+id = "45d73fbf51d24c448c5d0385b4a47316"
 
 # Production configuration
 [env.production]
@@ -48,7 +48,7 @@ vars = { ENVIRONMENT = "production" }
 [[env.production.kv_namespaces]]
 # KV Namespace ID untuk production
 binding = "VLESS_ACCOUNTS"
-id = "VLESS_ACCOUNTS"
+id = "45d73fbf51d24c448c5d0385b4a47316"
 
 # Build configuration
 [build]

@@ -49,3 +49,4 @@ id = "45d73fbf51d24c448c5d0385b4a47316"
 # Build configuration
 [build]
 command = ""
+compatibility_flags = ["tcp_sockets"]

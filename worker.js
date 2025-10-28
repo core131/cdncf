@@ -176,27 +176,171 @@ async function handleVLESSWebSocket(request, env) {
   const [client, server] = Object.values(webSocketPair);
   
   server.accept();
+  server.binaryType = 'arraybuffer'; // Ensure we get binary data
 
-  // Handle WebSocket messages
+  let hasProcessedHeader = false;
+  let remoteConnection = null;
+  let remoteWriter = null;
+
+  // This function will be called for each message
   server.addEventListener('message', async (event) => {
     try {
-      const data = event.data;
-      // VLESS protocol handling akan diimplementasikan di sini
-      server.send(data);
+      if (!hasProcessedHeader) {
+        hasProcessedHeader = true;
+
+        const headerData = await parseVLESSHeader(event.data);
+        if (headerData.error) {
+          throw new Error(headerData.error);
+        }
+
+        const { uuid, address, port, payload } = headerData;
+
+        const account = await env.VLESS_ACCOUNTS.get(uuid);
+        if (!account) {
+          throw new Error(`Invalid UUID: ${uuid}`);
+        }
+
+        // Send VLESS success response: version 0, no addons
+        server.send(new Uint8Array([0, 0]));
+
+        // Establish connection to the destination
+        // `connect` is a global function in Cloudflare Workers for outbound TCP
+        remoteConnection = await connect({ hostname: address, port });
+        remoteWriter = remoteConnection.writable.getWriter();
+
+        // Pipe data from remote back to the client WebSocket
+        remoteConnection.readable.pipeTo(new WritableStream({
+          async write(chunk) {
+            server.send(chunk);
+          },
+          close() {
+            console.log('Remote connection closed');
+          },
+          abort(err) {
+            console.error('Remote connection aborted:', err);
+          }
+        })).catch(err => {
+          console.error('Error piping from remote to client:', err);
+          // If piping fails, close the client connection
+          server.close(1011, 'Upstream connection error');
+        });
+
+        // Send the initial payload from the VLESS header to the destination
+        if (payload.byteLength > 0) {
+          await remoteWriter.write(payload);
+        }
+
+      } else {
+        // After the header, just forward all subsequent messages to the destination
+        if (remoteWriter) {
+          await remoteWriter.write(event.data);
+        }
+      }
     } catch (error) {
-      console.error('WebSocket error:', error);
-      server.close(1011, 'Internal error');
+      console.error('VLESS WebSocket processing error:', error);
+      // Close the WebSocket with an error message
+      server.close(1011, `Error: ${error.message}`);
     }
   });
 
-  server.addEventListener('close', () => {
-    console.log('WebSocket closed');
+  const cleanUp = () => {
+    if (remoteConnection) {
+      remoteConnection.close();
+    }
+  };
+
+  server.addEventListener('close', (event) => {
+    console.log('Client WebSocket closed', event);
+    cleanUp();
+  });
+
+  server.addEventListener('error', (err) => {
+    console.error('Client WebSocket error:', err);
+    cleanUp();
   });
 
   return new Response(null, {
     status: 101,
     webSocket: client
   });
+}
+
+// Correctly parse VLESS header from an ArrayBuffer
+function parseVLESSHeader(buffer) {
+  const dataView = new DataView(buffer);
+  let offset = 0;
+
+  // VLESS Version (1 byte)
+  const version = dataView.getUint8(offset);
+  offset += 1;
+  if (version !== 0) {
+    return { error: 'Invalid VLESS version' };
+  }
+
+  // UUID (16 bytes)
+  const uuidBytes = new Uint8Array(buffer, offset, 16);
+  let uuid = '';
+  for (let i = 0; i < 16; i++) {
+    uuid += uuidBytes[i].toString(16).padStart(2, '0');
+  }
+  uuid = `${uuid.slice(0, 8)}-${uuid.slice(8, 12)}-${uuid.slice(12, 16)}-${uuid.slice(16, 20)}-${uuid.slice(20)}`;
+  offset += 16;
+
+  // Add-ons length (1 byte) - skip them
+  const addOnLength = dataView.getUint8(offset);
+  offset += 1 + addOnLength;
+
+  // Command (1 byte)
+  const command = dataView.getUint8(offset);
+  offset += 1;
+  if (command !== 1) { // 1 = TCP, 2 = UDP
+    return { error: 'Unsupported command: only TCP is allowed' };
+  }
+
+  // Port (2 bytes, Big Endian)
+  const port = dataView.getUint16(offset);
+  offset += 2;
+
+  // Address Type (1 byte)
+  const addressType = dataView.getUint8(offset);
+  offset += 1;
+  let address = '';
+
+  switch (addressType) {
+    case 1: // IPv4
+      const ipv4Bytes = new Uint8Array(buffer, offset, 4);
+      address = Array.from(ipv4Bytes).join('.');
+      offset += 4;
+      break;
+    case 2: // Domain
+      const domainLength = dataView.getUint8(offset);
+      offset += 1;
+      const domainBytes = new Uint8Array(buffer, offset, domainLength);
+      address = new TextDecoder().decode(domainBytes);
+      offset += domainLength;
+      break;
+    case 3: // IPv6
+      const ipv6Bytes = new Uint8Array(buffer, offset, 16);
+      const ipv6 = [];
+      for (let i = 0; i < 16; i += 2) {
+        ipv6.push(dataView.getUint16(offset + i).toString(16));
+      }
+      address = ipv6.join(':');
+      offset += 16;
+      break;
+    default:
+      return { error: 'Invalid address type' };
+  }
+
+  // The rest of the buffer is the initial payload
+  const payload = buffer.slice(offset);
+
+  return {
+    uuid,
+    address,
+    port,
+    payload, // This is an ArrayBuffer
+  };
 }
 
 // HTML Frontend dengan React embedded

@@ -49,5 +49,3 @@ id = "VLESS_ACCOUNTS" # KV Namespace ID untuk production
 # Build configuration
 [build]
 command = ""
-
-# Compatibility flags

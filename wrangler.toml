@@ -2,13 +2,15 @@
 name = "vlcdn"
 main = "worker.js"
 compatibility_date = "2024-01-01"
-account_id = "32f9d5fc58dd05437ec5eacae4ac3b79" # Isi dengan Account ID Cloudflare Anda
+compatibility_flags = []  # letakkan di level atas
+account_id = "32f9d5fc58dd05437ec5eacae4ac3b79"
 workers_dev = true
 
 # KV Namespace untuk menyimpan akun VLESS
 [[kv_namespaces]]
+# Isi dengan KV Namespace ID setelah dibuat
 binding = "VLESS_ACCOUNTS"
-id = "VLESS_ACCOUNTS" # Isi dengan KV Namespace ID setelah dibuat
+id = "VLESS_ACCOUNTS"
 
 # Environment Variables (opsional)
 [vars]
@@ -35,18 +37,19 @@ enabled = true
 vars = { ENVIRONMENT = "development" }
 
 [[env.development.kv_namespaces]]
+# KV Namespace ID untuk development
 binding = "VLESS_ACCOUNTS"
-id = "VLESS_ACCOUNTS" # KV Namespace ID untuk development
+id = "VLESS_ACCOUNTS"
 
 # Production configuration
 [env.production]
 vars = { ENVIRONMENT = "production" }
 
 [[env.production.kv_namespaces]]
+# KV Namespace ID untuk production
 binding = "VLESS_ACCOUNTS"
-id = "VLESS_ACCOUNTS" # KV Namespace ID untuk production
+id = "VLESS_ACCOUNTS"
 
 # Build configuration
 [build]
 command = ""
-compatibility_flags = []

@@ -165,104 +165,129 @@ async function handleGetAccount(request, env, corsHeaders) {
   }
 }
 
-// Handler untuk WebSocket VLESS
+// Handler untuk WebSocket VLESS - Versi Diperbaiki dengan Stream Piping
 async function handleVLESSWebSocket(request, env) {
-  const upgradeHeader = request.headers.get('Upgrade');
-  if (!upgradeHeader || upgradeHeader !== 'websocket') {
-    return new Response('Expected Upgrade: websocket', { status: 426 });
-  }
+    const upgradeHeader = request.headers.get('Upgrade');
+    if (!upgradeHeader || upgradeHeader !== 'websocket') {
+        return new Response('Expected Upgrade: websocket', { status: 426 });
+    }
 
-  const webSocketPair = new WebSocketPair();
-  const [client, server] = Object.values(webSocketPair);
-  
-  server.accept();
-  server.binaryType = 'arraybuffer'; // Ensure we get binary data
+    const webSocketPair = new WebSocketPair();
+    const [client, server] = Object.values(webSocketPair);
 
-  let hasProcessedHeader = false;
-  let remoteConnection = null;
-  let remoteWriter = null;
+    server.accept();
 
-  // This function will be called for each message
-  server.addEventListener('message', async (event) => {
+    const log = (...args) => console.log('[VLESS]', ...args);
+    const readableWebSocketStream = makeReadableWebSocketStream(server, log);
+
+    let remoteSocket;
+    const writer = readableWebSocketStream.getWriter();
+
     try {
-      if (!hasProcessedHeader) {
-        hasProcessedHeader = true;
+        // Baca header VLESS dari pesan pertama
+        const { value: firstChunk, done } = await writer.read();
+        if (done || !firstChunk) {
+            throw new Error('No VLESS header received.');
+        }
 
-        const headerData = await parseVLESSHeader(event.data);
+        const headerData = parseVLESSHeader(firstChunk);
         if (headerData.error) {
-          throw new Error(headerData.error);
+            throw new Error(headerData.error);
         }
 
         const { uuid, address, port, payload } = headerData;
 
+        // Validasi UUID
         const account = await env.VLESS_ACCOUNTS.get(uuid);
         if (!account) {
-          throw new Error(`Invalid UUID: ${uuid}`);
+            throw new Error(`Invalid UUID: ${uuid}`);
         }
 
-        // Send VLESS success response: version 0, no addons
+        log(`Connecting to ${address}:${port}`);
+
+        // Kirim balasan sukses VLESS
         server.send(new Uint8Array([0, 0]));
 
-        // Establish connection to the destination
-        // `connect` is a global function in Cloudflare Workers for outbound TCP
-        remoteConnection = await connect({ hostname: address, port });
-        remoteWriter = remoteConnection.writable.getWriter();
+        // Buat koneksi ke tujuan
+        remoteSocket = await connect({ hostname: address, port });
+        log('Connection to destination established.');
 
-        // Pipe data from remote back to the client WebSocket
-        remoteConnection.readable.pipeTo(new WritableStream({
-          async write(chunk) {
-            server.send(chunk);
-          },
-          close() {
-            console.log('Remote connection closed');
-          },
-          abort(err) {
-            console.error('Remote connection aborted:', err);
-          }
-        })).catch(err => {
-          console.error('Error piping from remote to client:', err);
-          // If piping fails, close the client connection
-          server.close(1011, 'Upstream connection error');
+        // Tulis payload awal (jika ada) ke tujuan
+        if (payload.byteLength > 0) {
+            const writer = remoteSocket.writable.getWriter();
+            await writer.write(payload);
+            writer.releaseLock();
+        }
+
+        // Buat WritableStream untuk WebSocket agar bisa menerima data dari remote
+        const writableWebSocketStream = new WritableStream({
+            async write(chunk) {
+                server.send(chunk);
+            },
+            close() {
+                log('WebSocket writable stream closed.');
+            },
+            abort(err) {
+                log('WebSocket writable stream aborted:', err);
+            },
         });
 
-        // Send the initial payload from the VLESS header to the destination
-        if (payload.byteLength > 0) {
-          await remoteWriter.write(payload);
+        // Melepaskan lock pada reader stream WebSocket klien agar bisa di-pipe
+        writer.releaseLock();
+
+        // Mulai piping dua arah
+        await Promise.all([
+            remoteSocket.readable.pipeTo(writableWebSocketStream),
+            readableWebSocketStream.pipeTo(remoteSocket.writable),
+        ]).catch((err) => {
+            log('Piping error:', err);
+        });
+
+    } catch (err) {
+        log('Error in handleVLESSWebSocket:', err);
+        server.close(1011, err.message);
+        if (remoteSocket) {
+            remoteSocket.close();
         }
-
-      } else {
-        // After the header, just forward all subsequent messages to the destination
-        if (remoteWriter) {
-          await remoteWriter.write(event.data);
-        }
-      }
-    } catch (error) {
-      console.error('VLESS WebSocket processing error:', error);
-      // Close the WebSocket with an error message
-      server.close(1011, `Error: ${error.message}`);
     }
-  });
 
-  const cleanUp = () => {
-    if (remoteConnection) {
-      remoteConnection.close();
-    }
-  };
+    return new Response(null, {
+        status: 101,
+        webSocket: client,
+    });
+}
 
-  server.addEventListener('close', (event) => {
-    console.log('Client WebSocket closed', event);
-    cleanUp();
-  });
+/**
+ * Mengubah WebSocket menjadi ReadableStream untuk penanganan backpressure yang lebih baik.
+ */
+function makeReadableWebSocketStream(webSocketServer, log) {
+    let readableStreamController;
+    const stream = new ReadableStream({
+        start(controller) {
+            readableStreamController = controller;
+            webSocketServer.addEventListener('message', (event) => {
+                // Pastikan data dalam format yang benar (ArrayBuffer)
+                const data = event.data instanceof ArrayBuffer ? event.data : new TextEncoder().encode(event.data).buffer;
+                readableStreamController.enqueue(new Uint8Array(data));
+            });
+            webSocketServer.addEventListener('close', () => {
+                log('Client WebSocket closed, closing readable stream.');
+                readableStreamController.close();
+            });
+            webSocketServer.addEventListener('error', (err) => {
+                log('Client WebSocket error:', err);
+                readableStreamController.error(err);
+            });
+        },
+        cancel() {
+            log('Readable stream cancelled.');
+            if (webSocketServer.readyState === WebSocket.OPEN) {
+                webSocketServer.close(1000, 'Stream cancelled');
+            }
+        },
+    });
 
-  server.addEventListener('error', (err) => {
-    console.error('Client WebSocket error:', err);
-    cleanUp();
-  });
-
-  return new Response(null, {
-    status: 101,
-    webSocket: client
-  });
+    return stream;
 }
 
 // Correctly parse VLESS header from an ArrayBuffer
